@@ -25,7 +25,7 @@
 #include <iostream>
 
 namespace mapcrafter {
-namespace mc {
+namespace mc { 
 
 const uint8_t* ChunkSection::getArray(int i) const {
 	if (i == 0)
@@ -125,47 +125,89 @@ bool Chunk::readNBT(mc::BlockStateRegistry& block_registry, const char* data, si
 	const nbt::TagList& sections_tag = level.findTag<nbt::TagList>("Sections");
 	if (sections_tag.tag_type != nbt::TagCompound::TAG_TYPE)
 		return true;
+	// Some Servers may not be fully converted.
+	if (!level.hasList<nbt::TagCompound>("HeightMaps")){
+		// go through all sections
+		for (auto it = sections_tag.payload.begin(); it != sections_tag.payload.end(); ++it) {
+			const nbt::TagCompound& section_tag = (*it)->cast<nbt::TagCompound>();
+			
+			// make sure section is valid
+			if (!section_tag.hasTag<nbt::TagByte>("Y")
+					|| !section_tag.hasArray<nbt::TagByteArray>("Blocks", 4096)
+					|| !section_tag.hasArray<nbt::TagByteArray>("Data", 2048)
+					|| !section_tag.hasArray<nbt::TagByteArray>("BlockLight", 2048)
+					|| !section_tag.hasArray<nbt::TagByteArray>("SkyLight", 2048))
+				continue;
+			
+			const nbt::TagByte& y = section_tag.findTag<nbt::TagByte>("Y");
+			if (y.payload >= CHUNK_HEIGHT)
+				continue;
+			const nbt::TagByteArray& blocks = section_tag.findTag<nbt::TagByteArray>("Blocks");
+			const nbt::TagByteArray& data = section_tag.findTag<nbt::TagByteArray>("Data");
 
-	// go through all sections
-	for (auto it = sections_tag.payload.begin(); it != sections_tag.payload.end(); ++it) {
-		const nbt::TagCompound& section_tag = (*it)->cast<nbt::TagCompound>();
-		
-		// make sure section is valid
-		if (!section_tag.hasTag<nbt::TagByte>("Y")
-				|| !section_tag.hasArray<nbt::TagByteArray>("Blocks", 4096)
-				|| !section_tag.hasArray<nbt::TagByteArray>("Data", 2048)
-				|| !section_tag.hasArray<nbt::TagByteArray>("BlockLight", 2048)
-				|| !section_tag.hasArray<nbt::TagByteArray>("SkyLight", 2048))
-			continue;
-		
-		const nbt::TagByte& y = section_tag.findTag<nbt::TagByte>("Y");
-		if (y.payload >= CHUNK_HEIGHT)
-			continue;
-		const nbt::TagByteArray& blocks = section_tag.findTag<nbt::TagByteArray>("Blocks");
-		const nbt::TagByteArray& data = section_tag.findTag<nbt::TagByteArray>("Data");
+			const nbt::TagByteArray& block_light = section_tag.findTag<nbt::TagByteArray>("BlockLight");
+			const nbt::TagByteArray& sky_light = section_tag.findTag<nbt::TagByteArray>("SkyLight");
 
-		const nbt::TagByteArray& block_light = section_tag.findTag<nbt::TagByteArray>("BlockLight");
-		const nbt::TagByteArray& sky_light = section_tag.findTag<nbt::TagByteArray>("SkyLight");
+			// create a ChunkSection-object
+			ChunkSection section;
+			section.y = y.payload;
+			std::copy(blocks.payload.begin(), blocks.payload.end(), section.blocks);
+			if (!section_tag.hasArray<nbt::TagByteArray>("Add", 2048))
+				std::fill(&section.add[0], &section.add[2048], 0);
+			else {
+				const nbt::TagByteArray& add = section_tag.findTag<nbt::TagByteArray>("Add");
+				std::copy(add.payload.begin(), add.payload.end(), section.add);
+			}
+			std::copy(data.payload.begin(), data.payload.end(), section.data);
+			std::copy(block_light.payload.begin(), block_light.payload.end(), section.block_light);
+			std::copy(sky_light.payload.begin(), sky_light.payload.end(), section.sky_light);
 
-		// create a ChunkSection-object
-		ChunkSection section;
-		section.y = y.payload;
-		std::copy(blocks.payload.begin(), blocks.payload.end(), section.blocks);
-		if (!section_tag.hasArray<nbt::TagByteArray>("Add", 2048))
-			std::fill(&section.add[0], &section.add[2048], 0);
-		else {
-			const nbt::TagByteArray& add = section_tag.findTag<nbt::TagByteArray>("Add");
-			std::copy(add.payload.begin(), add.payload.end(), section.add);
+			// add this section to the section list
+			section_offsets[section.y] = sections.size();
+			sections.push_back(section);
 		}
-		std::copy(data.payload.begin(), data.payload.end(), section.data);
-		std::copy(block_light.payload.begin(), block_light.payload.end(), section.block_light);
-		std::copy(sky_light.payload.begin(), sky_light.payload.end(), section.sky_light);
+	// Parse the new tags (DataVersion 1519)
+	else {
+		const nbt::TagList& palette_tag = sections_tag.findTag<nbt::TagList>("palette");
+		for (auto it = sections_tag.payload.begin(); it != sections_tag.payload.end(); ++it) {
+			const nbt::TagCompound& section_tag = (*it)->cast<nbt::TagCompound>();
+			
+			// make sure section is valid
+			if (!section_tag.hasTag<nbt::TagByte>("Y")
+					|| !section_tag.hasList<nbt::TagCompound>("Palette")
+					|| !section_tag.hasArray<nbt::TagByteArray>("BlockStates", )
+					|| !section_tag.hasArray<nbt::TagByteArray>("BlockLight", 2048)
+					|| !section_tag.hasArray<nbt::TagByteArray>("SkyLight", 2048))
+				continue;
+			
+			const nbt::TagByte& y = section_tag.findTag<nbt::TagByte>("Y");
+			if (y.payload >= CHUNK_HEIGHT)
+				continue;
+			const nbt::TagByteArray& palette = section_tag.findTag<nbt::TagByteArray>("Blocks");
+			const nbt::TagByteArray& data = section_tag.findTag<nbt::TagByteArray>("Data");
+			
+			const nbt::TagByteArray& block_light = section_tag.findTag<nbt::TagByteArray>("BlockLight");
+			const nbt::TagByteArray& sky_light = section_tag.findTag<nbt::TagByteArray>("SkyLight");
 
-		// add this section to the section list
-		section_offsets[section.y] = sections.size();
-		sections.push_back(section);
+			// create a ChunkSection-object
+			ChunkSection section;
+			section.y = y.payload;
+			std::copy(blocks.payload.begin(), blocks.payload.end(), section.blocks);
+			if (!section_tag.hasArray<nbt::TagByteArray>("Add", 2048))
+				std::fill(&section.add[0], &section.add[2048], 0);
+			else {
+				const nbt::TagByteArray& add = section_tag.findTag<nbt::TagByteArray>("Add");
+				std::copy(add.payload.begin(), add.payload.end(), section.add);
+			}
+			std::copy(data.payload.begin(), data.payload.end(), section.data);
+			std::copy(block_light.payload.begin(), block_light.payload.end(), section.block_light);
+			std::copy(sky_light.payload.begin(), sky_light.payload.end(), section.sky_light);
+
+			// add this section to the section list
+			section_offsets[section.y] = sections.size();
+			sections.push_back(section);
+		}
 	}
-
 	return true;
 }
 
